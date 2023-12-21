@@ -1,4 +1,5 @@
-﻿#include <android/log.h>
+﻿#pragma once
+#include <android/log.h>
 
 #include "Gloss.h"
 

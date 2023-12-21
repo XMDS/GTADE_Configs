@@ -19,10 +19,15 @@ MYMOD(XMDS.GTADE.CONFIGS, GTADE_Configs, 1.0, XMDS);
 using namespace plugin;
 using namespace XB;
 
-static bool bEnableFrameLimit = false; // defaul
 static float Frame = 60.0f; // defaul
-static uintptr_t _ZN6CTimer8game_FPSE = 0;
 static bool bShowCoords = false;
+static uint32_t PrevTime = 0u;
+static uint32_t IntervalTime = 0u;
+
+static uintptr_t _ZN6CTimer8game_FPSE = 0u;
+static uintptr_t _ZN6CTimer22m_snTimeInMillisecondsE = 0u;
+static uintptr_t _ZN11CTheScripts14OnAMissionFlagE = 0u;
+static char* _ZN11CTheScripts11ScriptSpaceE = nullptr;
 
 namespace JniFunc
 {
@@ -101,30 +106,35 @@ static void* Proxy_UGameterSettings_OnFrameRateLimitSet(void* _this, bool bEnabl
 static void (*Orig_OnCScriptEvent)() = nullptr;
 static void Proxy_OnCScriptEvent()
 {
-	float fps = ReadMemory<float>(_ZN6CTimer8game_FPSE);
+	Orig_OnCScriptEvent();
 	
-	char text[256];
-	memset(text, 0, sizeof(text));
-	sprintf(text, "FPS: %.2f", fps);
-	uint16_t* wtext = new uint16_t[strlen(text) + 1];
-	
-	AsciiToGxtChar(text, wtext);
+	static char text[256];
+	float x = 0.0f;
+	float y = 0.0f;
 	int width = OS_ScreenGetWidth();
 	int height = OS_ScreenGetHeight();
 	float scaleX = (float)width / 1920.0f;
 	float scaleY = (float)height / 1080.0f;
-	float x = 28.0f * scaleX;
-	float y = 10.0f * scaleY;
 
-	CFont::SetColor(CRGBA(0, 255, 0, 255));
-	CFont::SetDropShadowPosition(0);
-	CFont::SetFontStyle(1);
-	CFont::SetJustify(1);
-	CFont::SetWrapx(1000.0f);
-	CFont::SetScale(1.3f);
-	CFont::SetOrientation(1);
-	CFont::PrintString(x, y, wtext);
-	delete wtext;
+	if (_ZN6CTimer8game_FPSE) {
+		float fps = ReadMemory<float>(_ZN6CTimer8game_FPSE, false);
+		memset(text, 0, sizeof(text));
+		sprintf(text, "FPS: %.2f", fps);
+		uint16_t* wtext = new uint16_t[strlen(text) + 1];
+		AsciiToGxtChar(text, wtext);
+		x = 28.0f * scaleX;
+		y = 10.0f * scaleY;
+
+		CFont::SetColor(CRGBA(0, 255, 0, 255));
+		CFont::SetDropShadowPosition(0);
+		CFont::SetFontStyle(1);
+		CFont::SetJustify(1);
+		CFont::SetWrapx(1000.0f);
+		CFont::SetScale(1.3f);
+		CFont::SetOrientation(1);
+		CFont::PrintString(x, y, wtext);
+		delete[] wtext;
+	}
 	
 	if (bShowCoords) {
 		if (Command<Commands::IS_PLAYER_PLAYING>(0)) {
@@ -140,6 +150,7 @@ static void Proxy_OnCScriptEvent()
 			AsciiToGxtChar(text, wtext2);
 			x = 28.0f * scaleX;
 			y = height - 50.0f * scaleY;
+
 			CFont::SetColor(CRGBA(0, 255, 0, 255));
 			CFont::SetDropShadowPosition(0);
 			CFont::SetFontStyle(1);
@@ -148,11 +159,32 @@ static void Proxy_OnCScriptEvent()
 			CFont::SetScale(1.3f);
 			CFont::SetOrientation(1);
 			CFont::PrintString(x, y, wtext2);
-			delete wtext2;
+			delete[] wtext2;
 		}
 	}
-	
-	return Orig_OnCScriptEvent();
+
+	if (_ZN6CTimer22m_snTimeInMillisecondsE) {
+		uint32_t cur_time = ReadMemory<uint32_t>(_ZN6CTimer22m_snTimeInMillisecondsE, false);
+		
+		if (_ZN11CTheScripts14OnAMissionFlagE && _ZN11CTheScripts11ScriptSpaceE) {
+			uint32_t on_mission_flag = ReadMemory<uint32_t>(_ZN11CTheScripts14OnAMissionFlagE, false);
+			if (cur_time - PrevTime > IntervalTime * 1000 && !on_mission_flag && !*(_ZN11CTheScripts11ScriptSpaceE + on_mission_flag)) {
+				Command<Commands::AUTO_SAVE>();
+				PrevTime = cur_time;
+			}
+		}
+		else {
+			if (cur_time - PrevTime > IntervalTime * 1000) {
+				Command<Commands::AUTO_SAVE>();
+				PrevTime = cur_time;
+			}
+		}
+	}
+}
+
+static void Proxy_UGameterSettings_ResetSettingsToPlatformDefault(UGameterSettings* _this, int a2, char a3, char a4)
+{
+	// Disable reset settings to platform default function
 }
 
 extern "C" void PluginMain(JNIEnv* env)
@@ -171,21 +203,26 @@ extern "C" void PluginMain(JNIEnv* env)
 
 	char config_path[512];
 	memset(config_path, 0, sizeof(config_path));
-	sprintf(config_path, "%s/Android/data/%s/mods/config.ini", storage_path, package_name);
+	sprintf(config_path, "%s/Android/data/%s/configs/config.ini", storage_path, package_name);
 	inireader.SetIniPath(config_path);
 
 	if (access(config_path, F_OK)) {
 		inireader.WriteBoolean(PLUGIN_NAME, "Enable", true);
-		inireader.WriteString(PLUGIN_NAME, "Author", "XMDS 2841824304@qq.com");
+		inireader.WriteString(PLUGIN_NAME, "Author", "XMDS 联合百分网 100520.com 发布 || QQ群: 649867512");
 		inireader.WriteBoolean(PLUGIN_NAME, "ShowCoords", bShowCoords);
+		inireader.WriteBoolean(PLUGIN_NAME, "FixGameResetSettings", true);
 
-		inireader.WriteBoolean("FrameLimit", "Enable", bEnableFrameLimit);
+		inireader.WriteBoolean("FrameLimit", "Enable", false);
 		inireader.WriteString("FrameLimit", "FPS", "60.0");
 		inireader.WriteBoolean("FrameLimit", "ShowFPS", true);
+
+		inireader.WriteBoolean("AutoSave", "Enable", true);
+		inireader.WriteInteger("AutoSave", "IntervalTime", 30);
+		inireader.WriteBoolean("AutoSave", "OnMissionEnable", false);
 	}
 
 	if (inireader.ReadBoolean(PLUGIN_NAME, "Enable", false)) {
-		bEnableFrameLimit = inireader.ReadBoolean("FrameLimit", "Enable", true);
+		bool bEnableFrameLimit = inireader.ReadBoolean("FrameLimit", "Enable", true);
 		Frame = inireader.ReadFloat("FrameLimit", "FPS", 30.0f);
 
 		if (Frame > 0.0f) {
@@ -210,13 +247,29 @@ extern "C" void PluginMain(JNIEnv* env)
 			WriteMemory<uint32_t>(bias + 0x57DDAEC, 0x52800789);
 			*/
 		}
-
-		GlossHook((void*)(bias + 0x57693E4u), (void*)Proxy_OnCScriptEvent, (void**)&Orig_OnCScriptEvent);
-
-		bShowCoords = inireader.ReadBoolean(PLUGIN_NAME, "ShowCoords", false);
+		
 		if (inireader.ReadBoolean("FrameLimit", "ShowFPS", false)) {
 			// show fps
 			_ZN6CTimer8game_FPSE = GlossSymbol(handle, "_ZN6CTimer8game_FPSE", NULL);
+		}
+		
+		bShowCoords = inireader.ReadBoolean(PLUGIN_NAME, "ShowCoords", false);
+		
+		if (inireader.ReadBoolean("AutoSave", "Enable", false)) {
+			IntervalTime = inireader.ReadInteger("AutoSave", "IntervalTime", 0);
+			if (IntervalTime > 0) {
+				if (!inireader.ReadBoolean("AutoSave", "OnMissionEnable", false)) {
+					_ZN11CTheScripts14OnAMissionFlagE = GlossSymbol(handle, "_ZN11CTheScripts14OnAMissionFlagE", NULL);
+					_ZN11CTheScripts11ScriptSpaceE = (char*)GlossSymbol(handle, "_ZN11CTheScripts11ScriptSpaceE", NULL);
+				}
+				_ZN6CTimer22m_snTimeInMillisecondsE = GlossSymbol(handle, "_ZN6CTimer22m_snTimeInMillisecondsE", NULL);
+			}
+		}
+		
+		GlossHookBranchBL((void*)(bias + 0x557FF74u), (void*)Proxy_OnCScriptEvent, (void**)&Orig_OnCScriptEvent, $ARM64);
+		
+		if (inireader.ReadBoolean(PLUGIN_NAME, "FixGameResetSettings", false)) {
+			GlossHookBranchBL((void*)(bias + 0x4D93F2Cu), (void*)Proxy_UGameterSettings_ResetSettingsToPlatformDefault, NULL, $ARM64);
 		}
 	}
 }
