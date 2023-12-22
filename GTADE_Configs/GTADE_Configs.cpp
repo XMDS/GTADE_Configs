@@ -107,6 +107,9 @@ static void (*Orig_OnCScriptEvent)() = nullptr;
 static void Proxy_OnCScriptEvent()
 {
 	Orig_OnCScriptEvent();
+
+	// XMDS_LOGI("InternalFilePath: %s", (char16_t*)(bias + 0xA7E3548)); // GInternalFilePath
+	// XMDS_LOGI("ExternalFilePath: %s", ReadMemory<char16_t*>(bias + 0xA7E3548)); // GExternalFilePath
 	
 	static char text[256];
 	float x = 0.0f;
@@ -190,6 +193,8 @@ static void Proxy_UGameterSettings_ResetSettingsToPlatformDefault(UGameterSettin
 extern "C" void PluginMain(JNIEnv* env)
 {
 	XMDS_LOGI("'%s' init...", PLUGIN_NAME);
+	GAME_VER game_ver = GetGameVersionId();
+	
 	void* handle = GetGameHandle();
 	uintptr_t addr = 0u;
 
@@ -217,7 +222,7 @@ extern "C" void PluginMain(JNIEnv* env)
 		inireader.WriteBoolean("FrameLimit", "ShowFPS", true);
 
 		inireader.WriteBoolean("AutoSave", "Enable", true);
-		inireader.WriteInteger("AutoSave", "IntervalTime", 30);
+		inireader.WriteInteger("AutoSave", "IntervalTime", 15);
 		inireader.WriteBoolean("AutoSave", "OnMissionEnable", false);
 	}
 
@@ -232,11 +237,25 @@ extern "C" void PluginMain(JNIEnv* env)
 					return XMDS_LOGE("Get game symbol '_ZN16UGameterSettings19OnFrameRateLimitSetEb' failed!");
 				}
 				GlossHook((void*)addr, (void*)Proxy_UGameterSettings_OnFrameRateLimitSet, (void**)&Orig_UGameterSettings_OnFrameRateLimitSet); // hook frame limit
-				WriteMemory<float>(bias + 0x3477B9Cu + 4u, Frame); // ue max frame
+				if (game_ver == GAME_VER::SA_DE_Netflix_1_72)
+					WriteMemory<float>(bias + 0x3477B9Cu + 4u, Frame); // ue max frame
+				else if (game_ver == GAME_VER::SA_DE_1_72)
+					WriteMemory<float>(bias + 0x346E71Cu + 4u, Frame); // ue max frame
+				else
+					return XMDS_LOGE("game_ver: '%d' not support!", game_ver);
 			}
 
-			WriteMemory<float>(bias + 0x3477B9Cu, Frame); // ue min frame
-			WriteMemory<uint32_t>(bias + 0xA75EA88u, static_cast<uint32_t>(Frame)); // orig game frame limit
+			if (game_ver == GAME_VER::SA_DE_Netflix_1_72) {
+				WriteMemory<float>(bias + 0x3477B9Cu, Frame); // ue min frame
+				WriteMemory<uint32_t>(bias + 0xA75EA88u, static_cast<uint32_t>(Frame)); // orig game frame limit
+			}
+			else if (game_ver == GAME_VER::SA_DE_1_72) {
+				WriteMemory<float>(bias + 0x346E71Cu, Frame); // ue min frame
+				// WriteMemory<uint32_t>(bias + 0xA75EA88u, static_cast<uint32_t>(Frame)); // orig game frame limit
+			}
+			else
+				return XMDS_LOGE("game_ver: '%d' not support!", game_ver);
+
 
 			// no need orig game frame limit
 			/*
@@ -247,14 +266,14 @@ extern "C" void PluginMain(JNIEnv* env)
 			WriteMemory<uint32_t>(bias + 0x57DDAEC, 0x52800789);
 			*/
 		}
-		
+
 		if (inireader.ReadBoolean("FrameLimit", "ShowFPS", false)) {
 			// show fps
 			_ZN6CTimer8game_FPSE = GlossSymbol(handle, "_ZN6CTimer8game_FPSE", NULL);
 		}
-		
+
 		bShowCoords = inireader.ReadBoolean(PLUGIN_NAME, "ShowCoords", false);
-		
+
 		if (inireader.ReadBoolean("AutoSave", "Enable", false)) {
 			IntervalTime = inireader.ReadInteger("AutoSave", "IntervalTime", 0);
 			if (IntervalTime > 0) {
@@ -265,30 +284,48 @@ extern "C" void PluginMain(JNIEnv* env)
 				_ZN6CTimer22m_snTimeInMillisecondsE = GlossSymbol(handle, "_ZN6CTimer22m_snTimeInMillisecondsE", NULL);
 			}
 		}
-		
-		GlossHookBranchBL((void*)(bias + 0x557FF74u), (void*)Proxy_OnCScriptEvent, (void**)&Orig_OnCScriptEvent, $ARM64);
+
+		if (game_ver == GAME_VER::SA_DE_Netflix_1_72) {
+			GlossHookBranchBL((void*)(bias + 0x557FF74u), (void*)Proxy_OnCScriptEvent, (void**)&Orig_OnCScriptEvent, $ARM64);
+		}
+		else if (game_ver == GAME_VER::SA_DE_1_72) {
+			GlossHookBranchBL((void*)(bias + 0x556E66Cu), (void*)Proxy_OnCScriptEvent, (void**)&Orig_OnCScriptEvent, $ARM64);
+		}
+		else {
+			return XMDS_LOGE("game_ver: '%d' not support!", game_ver);
+		}
 		
 		if (inireader.ReadBoolean(PLUGIN_NAME, "FixGameResetSettings", false)) {
-			GlossHookBranchBL((void*)(bias + 0x4D93F2Cu), (void*)Proxy_UGameterSettings_ResetSettingsToPlatformDefault, NULL, $ARM64);
+			if (game_ver == GAME_VER::SA_DE_Netflix_1_72) {
+				GlossHookBranchBL((void*)(bias + 0x4D93F2Cu), (void*)Proxy_UGameterSettings_ResetSettingsToPlatformDefault, NULL, $ARM64);
+			}
+			else if (game_ver == GAME_VER::SA_DE_1_72) {
+				GlossHookBranchBL((void*)(bias + 0x4D88924u), (void*)Proxy_UGameterSettings_ResetSettingsToPlatformDefault, NULL, $ARM64);
+			}
+			else {
+				return XMDS_LOGE("game_ver: '%d' not support!", game_ver);
+			}
 		}
 	}
 }
 
-extern "C" void OnModPreLoad()
+#ifdef __USE_AML__
+extern "C" void OnModLoad()
 {
 	JNIEnv* env = aml->GetJNIEnvironment();
 	PluginMain(env);
 }
-
-JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved)
+#else
+JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved)
 {
 	JNIEnv* env = nullptr;
-	if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+	if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
 		return JNI_ERR;
 	}
 
 	PluginMain(env);
 	return JNI_VERSION_1_6;
 }
+#endif // __USE_AML__
 
 
